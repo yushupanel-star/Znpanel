@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MASTER KEY CONTROL — Firebase</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#07090d;color:#f5f7fb;font-family:Arial,sans-serif;min-height:100vh}
+body:before{content:"";position:fixed;inset:-30%;background:radial-gradient(circle at 20% 20%,#18344a55,transparent 30%),radial-gradient(circle at 80% 70%,#351b4a55,transparent 30%);filter:blur(60px);z-index:-1}
+.wrap{max-width:1100px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:20px}
+h1{margin:0;font-size:22px;letter-spacing:2px}.status{padding:8px 12px;border:1px solid #26313e;border-radius:10px;font-size:12px}
+.ok{color:#65ffad}.bad{color:#ff7070}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card,.panel{background:#0d1118cc;border:1px solid #202a35;border-radius:16px;box-shadow:0 12px 35px #0005}
+.card{padding:18px}.num{font-size:25px;font-weight:bold;margin-top:7px}.muted{color:#8995a3;font-size:12px}
+.panel{padding:20px;margin-top:14px}h2{font-size:15px;margin:0 0 16px}
+.form{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}label{font-size:11px;color:#8e99a8}input,select,button{width:100%;margin-top:6px;border-radius:10px;border:1px solid #293440;background:#111720;color:#fff;padding:12px}
+button{cursor:pointer;font-weight:bold}button:hover{filter:brightness(1.2)}.primary{background:#1769ff;border-color:#1769ff}.danger{background:#36151a;border-color:#6e2932}.ghost{background:#111720}
+.key{font-family:monospace;letter-spacing:1px}.row{display:flex;gap:8px;align-items:center}.row button{width:auto;margin:0;padding:8px 10px}
+table{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px}th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #1e2731}th{color:#7f8b99;font-size:11px}
+.search{max-width:300px;margin-top:0}.actions{display:flex;gap:6px}.modal{display:none;position:fixed;inset:0;background:#000b;align-items:center;justify-content:center;padding:18px}.modalbox{width:min(600px,100%);max-height:80vh;overflow:auto;background:#0d1118;border:1px solid #293440;border-radius:16px;padding:20px}
+.user{padding:11px 0;border-bottom:1px solid #202a35}.empty{text-align:center;color:#8995a3;padding:20px}
+@media(max-width:800px){.grid{grid-template-columns:repeat(2,1fr)}.form{grid-template-columns:repeat(2,1fr)}table{display:block;overflow:auto;white-space:nowrap}}
+@media(max-width:500px){.wrap{padding:12px}.form{grid-template-columns:1fr}.top{align-items:flex-start}.grid{gap:8px}.card{padding:13px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="top">
+  <div><h1>MASTER KEY CONTROL</h1><div class="muted">REAL-TIME FIREBASE LICENSE PANEL</div></div>
+  <div id="status" class="status">Connecting...</div>
+</div>
+
+<div class="grid">
+  <div class="card"><div class="muted">TOTAL KEYS</div><div class="num" id="total">0</div></div>
+  <div class="card"><div class="muted">ACTIVE</div><div class="num" id="active">0</div></div>
+  <div class="card"><div class="muted">EXPIRED</div><div class="num" id="expired">0</div></div>
+  <div class="card"><div class="muted">REVOKED</div><div class="num" id="revoked">0</div></div>
+</div>
+
+<div class="panel">
+<h2>GENERATE MASTER KEY</h2>
+<div class="form">
+<div><label>EXPIRY</label><select id="expiry"><option value="1800000">30 Minutes</option><option value="3600000">1 Hour</option><option value="21600000">6 Hours</option><option value="43200000">12 Hours</option><option value="86400000">1 Day</option><option value="604800000">7 Days</option><option value="2592000000">30 Days</option><option value="0">Never</option></select></div>
+<div><label>MAX UNIQUE USERS</label><input id="maxUsers" type="number" min="1" value="5"></div>
+<div><label>KEY LENGTH</label><select id="length"><option>8</option><option selected>12</option><option>16</option><option>20</option></select></div>
+<div style="display:flex;align-items:end"><button class="primary" onclick="generateKey()">GENERATE KEY</button></div>
+</div>
+</div>
+
+<div class="panel">
+<div class="row" style="justify-content:space-between;flex-wrap:wrap">
+<h2 style="margin:0">KEY DATABASE</h2>
+<input class="search" id="search" placeholder="Search key..." oninput="render()">
+</div>
+<table><thead><tr><th>KEY</th><th>EXPIRY</th><th>USERS</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody id="tbody"></tbody></table>
+</div>
+</div>
+
+<div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
+<div class="modalbox"><div class="row" style="justify-content:space-between"><h2>KEY USERS</h2><button class="ghost" onclick="closeModal()">CLOSE</button></div><div id="users"></div></div>
+</div>
+
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+import {getDatabase,ref,push,set,onValue,update,remove} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+
+/*
+  IMPORTANT:
+  Replace the values below with the WEB APP config from:
+  Firebase Console -> Project settings -> Your apps -> Web app
+  Do NOT paste a service-account/private key here.
+*/
+const firebaseConfig = {
+  apiKey: "PASTE_WEB_APP_API_KEY",
+  authDomain: "PASTE_WEB_APP_AUTH_DOMAIN",
+  databaseURL: "https://znrox-panel-default-rtdb.firebaseio.com",
+  projectId: "znrox-panel",
+  storageBucket: "znrox-panel.firebasestorage.app",
+  messagingSenderId: "901427038427",
+  appId: "PASTE_WEB_APP_APP_ID"
+};
+
+const app=initializeApp(firebaseConfig);
+const db=getDatabase(app);
+const keysRef=ref(db,"masterKeys");
+let keys={};
+
+onValue(keysRef,(snap)=>{
+  keys=snap.val()||{};
+  document.getElementById("status").textContent="● LIVE";
+  document.getElementById("status").className="status ok";
+  render();
+},(err)=>{
+  document.getElementById("status").textContent="Database Error";
+  document.getElementById("status").className="status bad";
+  console.error(err);
+});
+
+window.generateKey=async()=>{
+  const len=Number(document.getElementById("length").value);
+  const maxUsers=Math.max(1,Number(document.getElementById("maxUsers").value)||1);
+  const duration=Number(document.getElementById("expiry").value);
+  const chars="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const arr=new Uint32Array(len);
+  crypto.getRandomValues(arr);
+  let key="MASTER-";
+  for(let i=0;i<len;i++) key+=chars[arr[i]%chars.length];
+
+  const expiresAt=duration===0?0:Date.now()+duration;
+  const newRef=push(keysRef);
+  await set(newRef,{
+    key, createdAt:Date.now(), expiresAt, maxUsers,
+    revoked:false, users:{}
+  });
+  alert("Key generated:\n"+key);
+};
+
+window.render=()=>{
+  const q=document.getElementById("search").value.toUpperCase();
+  const list=Object.entries(keys).filter(([id,k])=>(k.key||"").includes(q));
+  let active=0,expired=0,revoked=0;
+  Object.values(keys).forEach(k=>{
+    if(k.revoked) revoked++;
+    else if(k.expiresAt && Date.now()>k.expiresAt) expired++;
+    else active++;
+  });
+  document.getElementById("total").textContent=Object.keys(keys).length;
+  document.getElementById("active").textContent=active;
+  document.getElementById("expired").textContent=expired;
+  document.getElementById("revoked").textContent=revoked;
+
+  document.getElementById("tbody").innerHTML=list.map(([id,k])=>{
+    const users=Object.keys(k.users||{}).length;
+    const isExpired=k.expiresAt && Date.now()>k.expiresAt;
+    const status=k.revoked?"REVOKED":isExpired?"EXPIRED":"ACTIVE";
+    return `<tr>
+      <td class="key">${escapeHtml(k.key||"")}</td>
+      <td>${k.expiresAt?new Date(k.expiresAt).toLocaleString():"NEVER"}</td>
+      <td>${users} / ${k.maxUsers||1}</td>
+      <td>${status}</td>
+      <td><div class="actions">
+        <button onclick="copyKey('${id}')">COPY</button>
+        <button onclick="viewUsers('${id}')">👁</button>
+        ${!k.revoked&&!isExpired?`<button class="danger" onclick="revokeKey('${id}')">REVOKE</button>`:""}
+        <button class="danger" onclick="deleteKey('${id}')">DELETE</button>
+      </div></td>
+    </tr>`;
+  }).join("")||`<tr><td colspan="5" class="empty">No keys found</td></tr>`;
+};
+
+window.copyKey=async(id)=>{await navigator.clipboard.writeText(keys[id].key);alert("Copied");};
+window.revokeKey=async(id)=>{if(confirm("Revoke this key?"))await update(ref(db,"masterKeys/"+id),{revoked:true});};
+window.deleteKey=async(id)=>{if(confirm("Delete permanently?"))await remove(ref(db,"masterKeys/"+id));};
+
+window.viewUsers=(id)=>{
+  const k=keys[id], box=document.getElementById("users");
+  const users=Object.entries(k.users||{});
+  box.innerHTML=users.length?users.map(([uid,u])=>`<div class="user"><b>${escapeHtml(u.name||"Subscriber")}</b><br><span class="muted">UID: ${escapeHtml(uid)}<br>First used: ${new Date(u.firstUsed).toLocaleString()}<br>Last active: ${new Date(u.lastActive).toLocaleString()}</span></div>`).join(""):`<div class="empty">No subscribers registered for this key.</div>`;
+  document.getElementById("modal").style.display="flex";
+};
+window.closeModal=()=>document.getElementById("modal").style.display="none";
+
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));}
+setInterval(render,30000);
+</script>
+</body>
+                      </html>
